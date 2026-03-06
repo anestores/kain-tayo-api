@@ -35,6 +35,7 @@ Route::prefix('mobile')->middleware('auth:sanctum')->group(function () {
     Route::put('/user/language', [LanguageController::class, 'updatePreference']);
 
     // Meal Plans
+    Route::get('/meal-plan/active', [MealPlanController::class, 'active']);
     Route::post('/meal-plan/generate', [MealPlanController::class, 'generate']);
     Route::get('/meal-plan/{id}', [MealPlanController::class, 'show']);
     Route::post('/meal-plan/{id}/swap', [MealPlanController::class, 'swap']);

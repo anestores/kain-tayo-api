@@ -116,6 +116,40 @@ class MealPlanController extends Controller
         }
     }
 
+    public function active(Request $request)
+    {
+        try {
+            $user = $request->user();
+            $mealPlan = MealPlan::where('user_id', $user->id)
+                ->where('status', 'active')
+                ->with(['items.recipe.ingredients', 'items.recipe.equipment'])
+                ->latest()
+                ->first();
+
+            if (!$mealPlan) {
+                return response()->json([
+                    'success' => true,
+                    'data' => null,
+                ]);
+            }
+
+            $groupedItems = $mealPlan->items->groupBy('day_number');
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'meal_plan' => $mealPlan,
+                    'days' => $groupedItems,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to retrieve active meal plan',
+            ], 500);
+        }
+    }
+
     public function show($id)
     {
         try {
