@@ -79,9 +79,7 @@ class MealPlanController extends Controller
                         ]);
 
                         $allRecipeIds[] = $recipe->id;
-                        $recipeCost = $recipe->ingredients()->sum(
-                            DB::raw('recipe_ingredients.quantity * ingredients.estimated_price')
-                        );
+                        $recipeCost = $recipe->ingredients()->sum('recipe_ingredients.estimated_cost');
                         $totalCost += $recipeCost;
                     }
                 }
@@ -218,9 +216,7 @@ class MealPlanController extends Controller
             $totalCost = 0;
             $mealPlan->load('items.recipe.ingredients');
             foreach ($mealPlan->items as $planItem) {
-                $recipeCost = $planItem->recipe->ingredients()->sum(
-                    DB::raw('recipe_ingredients.quantity * ingredients.estimated_price')
-                );
+                $recipeCost = $planItem->recipe->ingredients()->sum('recipe_ingredients.estimated_cost');
                 $totalCost += $recipeCost;
             }
             $mealPlan->update(['total_cost' => $totalCost]);
@@ -361,7 +357,7 @@ class MealPlanController extends Controller
                 'ingredients.id as ingredient_id',
                 DB::raw('SUM(recipe_ingredients.quantity) as total_quantity'),
                 'recipe_ingredients.unit',
-                DB::raw('SUM(recipe_ingredients.quantity * ingredients.estimated_price) as total_price')
+                DB::raw('SUM(recipe_ingredients.estimated_cost) as total_price')
             )
             ->groupBy('ingredients.id', 'recipe_ingredients.unit')
             ->get();
