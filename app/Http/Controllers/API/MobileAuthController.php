@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Models\UserProfile;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
@@ -41,6 +42,7 @@ class MobileAuthController extends Controller
                 'data' => [
                     'user' => $user,
                     'token' => $token,
+                    'has_profile' => false,
                 ]
             ], 201);
         } catch (\Exception $e) {
@@ -84,6 +86,7 @@ class MobileAuthController extends Controller
                 'data' => [
                     'user' => $user,
                     'token' => $token,
+                    'has_profile' => UserProfile::where('user_id', $user->id)->exists(),
                 ]
             ]);
         } catch (\Exception $e) {
@@ -113,10 +116,12 @@ class MobileAuthController extends Controller
 
     public function me(Request $request)
     {
+        $user = $request->user();
         return response()->json([
             'success' => true,
             'data' => [
-                'user' => $request->user(),
+                'user' => $user,
+                'has_profile' => UserProfile::where('user_id', $user->id)->exists(),
             ]
         ]);
     }
