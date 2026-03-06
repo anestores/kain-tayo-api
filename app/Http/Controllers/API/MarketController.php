@@ -31,7 +31,7 @@ class MarketController extends Controller
             $lat = $request->query('lat');
             $lng = $request->query('lng');
             $sortBy = $request->query('sort_by', 'distance');
-            $radius = $request->query('radius', 5);
+            $radius = $request->query('radius', 25);
 
             // Haversine formula for distance in kilometers
             $haversine = "(6371 * acos(
