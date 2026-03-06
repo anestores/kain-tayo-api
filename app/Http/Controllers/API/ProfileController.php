@@ -18,7 +18,7 @@ class ProfileController extends Controller
         $validator = Validator::make($request->all(), [
             'household_count' => 'required|integer|min:1|max:20',
             'household_type' => 'required|in:bata,matatanda,halo-halo',
-            'budget' => 'required|numeric|min:300|max:800',
+            'budget' => 'required|numeric|min:300|max:5000',
             'language_code' => 'nullable|string|max:5',
             'dietary_restrictions' => 'nullable|array',
             'dietary_restrictions.*' => 'integer|exists:dietary_restrictions,id',
@@ -145,7 +145,7 @@ class ProfileController extends Controller
         $validator = Validator::make($request->all(), [
             'household_count' => 'sometimes|integer|min:1|max:20',
             'household_type' => 'sometimes|in:bata,matatanda,halo-halo',
-            'budget' => 'sometimes|numeric|min:300|max:800',
+            'budget' => 'sometimes|numeric|min:300|max:5000',
             'language_code' => 'sometimes|nullable|string|max:5',
             'dietary_restrictions' => 'sometimes|nullable|array',
             'dietary_restrictions.*' => 'integer|exists:dietary_restrictions,id',
