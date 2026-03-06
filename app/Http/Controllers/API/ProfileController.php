@@ -4,6 +4,7 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\DietaryRestriction;
+use App\Models\Equipment;
 use App\Models\UserDietaryRestriction;
 use App\Models\UserEquipment;
 use App\Models\UserProfile;
@@ -21,11 +22,13 @@ class ProfileController extends Controller
             'budget' => 'required|numeric|min:300|max:5000',
             'language_code' => 'nullable|string|max:5',
             'dietary_restrictions' => 'nullable|array',
-            'dietary_restrictions.*' => 'integer|exists:dietary_restrictions,id',
+            'dietary_restrictions.*' => 'string|max:255',
             'custom_restrictions' => 'nullable|array',
             'custom_restrictions.*' => 'string|max:255',
+            'lifestyle_preferences' => 'nullable|array',
+            'lifestyle_preferences.*' => 'string|max:255',
             'equipment' => 'nullable|array',
-            'equipment.*' => 'integer|exists:equipment,id',
+            'equipment.*' => 'string|max:255',
         ]);
 
         if ($validator->fails()) {
@@ -51,14 +54,34 @@ class ProfileController extends Controller
                 ]
             );
 
-            // Sync dietary restrictions
+            // Sync dietary restrictions (by name)
             UserDietaryRestriction::where('user_id', $user->id)->delete();
 
             if ($request->dietary_restrictions) {
-                foreach ($request->dietary_restrictions as $restrictionId) {
+                foreach ($request->dietary_restrictions as $name) {
+                    $restriction = DietaryRestriction::firstOrCreate(
+                        ['name' => $name],
+                        ['type' => 'allergy', 'is_default' => false]
+                    );
+
                     UserDietaryRestriction::create([
                         'user_id' => $user->id,
-                        'dietary_restriction_id' => $restrictionId,
+                        'dietary_restriction_id' => $restriction->id,
+                    ]);
+                }
+            }
+
+            // Sync lifestyle preferences as dietary restrictions
+            if ($request->lifestyle_preferences) {
+                foreach ($request->lifestyle_preferences as $name) {
+                    $restriction = DietaryRestriction::firstOrCreate(
+                        ['name' => $name],
+                        ['type' => 'lifestyle', 'is_default' => false]
+                    );
+
+                    UserDietaryRestriction::create([
+                        'user_id' => $user->id,
+                        'dietary_restriction_id' => $restriction->id,
                     ]);
                 }
             }
@@ -78,14 +101,19 @@ class ProfileController extends Controller
                 }
             }
 
-            // Sync equipment
+            // Sync equipment (by name)
             UserEquipment::where('user_id', $user->id)->delete();
 
             if ($request->equipment) {
-                foreach ($request->equipment as $equipmentId) {
+                foreach ($request->equipment as $name) {
+                    $equip = Equipment::firstOrCreate(
+                        ['name' => $name],
+                        ['is_default' => false]
+                    );
+
                     UserEquipment::create([
                         'user_id' => $user->id,
-                        'equipment_id' => $equipmentId,
+                        'equipment_id' => $equip->id,
                     ]);
                 }
             }
@@ -106,7 +134,7 @@ class ProfileController extends Controller
 
             return response()->json([
                 'success' => false,
-                'message' => 'Profile setup failed',
+                'message' => 'Profile setup failed: ' . $e->getMessage(),
             ], 500);
         }
     }
@@ -148,11 +176,13 @@ class ProfileController extends Controller
             'budget' => 'sometimes|numeric|min:300|max:5000',
             'language_code' => 'sometimes|nullable|string|max:5',
             'dietary_restrictions' => 'sometimes|nullable|array',
-            'dietary_restrictions.*' => 'integer|exists:dietary_restrictions,id',
+            'dietary_restrictions.*' => 'string|max:255',
             'custom_restrictions' => 'sometimes|nullable|array',
             'custom_restrictions.*' => 'string|max:255',
+            'lifestyle_preferences' => 'sometimes|nullable|array',
+            'lifestyle_preferences.*' => 'string|max:255',
             'equipment' => 'sometimes|nullable|array',
-            'equipment.*' => 'integer|exists:equipment,id',
+            'equipment.*' => 'string|max:255',
         ]);
 
         if ($validator->fails()) {
@@ -182,14 +212,33 @@ class ProfileController extends Controller
             }
 
             // Sync dietary restrictions if provided
-            if ($request->has('dietary_restrictions') || $request->has('custom_restrictions')) {
+            if ($request->has('dietary_restrictions') || $request->has('custom_restrictions') || $request->has('lifestyle_preferences')) {
                 UserDietaryRestriction::where('user_id', $user->id)->delete();
 
                 if ($request->dietary_restrictions) {
-                    foreach ($request->dietary_restrictions as $restrictionId) {
+                    foreach ($request->dietary_restrictions as $name) {
+                        $restriction = DietaryRestriction::firstOrCreate(
+                            ['name' => $name],
+                            ['type' => 'allergy', 'is_default' => false]
+                        );
+
                         UserDietaryRestriction::create([
                             'user_id' => $user->id,
-                            'dietary_restriction_id' => $restrictionId,
+                            'dietary_restriction_id' => $restriction->id,
+                        ]);
+                    }
+                }
+
+                if ($request->lifestyle_preferences) {
+                    foreach ($request->lifestyle_preferences as $name) {
+                        $restriction = DietaryRestriction::firstOrCreate(
+                            ['name' => $name],
+                            ['type' => 'lifestyle', 'is_default' => false]
+                        );
+
+                        UserDietaryRestriction::create([
+                            'user_id' => $user->id,
+                            'dietary_restriction_id' => $restriction->id,
                         ]);
                     }
                 }
@@ -215,10 +264,15 @@ class ProfileController extends Controller
                 UserEquipment::where('user_id', $user->id)->delete();
 
                 if ($request->equipment) {
-                    foreach ($request->equipment as $equipmentId) {
+                    foreach ($request->equipment as $name) {
+                        $equip = Equipment::firstOrCreate(
+                            ['name' => $name],
+                            ['is_default' => false]
+                        );
+
                         UserEquipment::create([
                             'user_id' => $user->id,
-                            'equipment_id' => $equipmentId,
+                            'equipment_id' => $equip->id,
                         ]);
                     }
                 }
