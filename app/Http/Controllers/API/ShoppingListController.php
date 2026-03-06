@@ -17,20 +17,36 @@ class ShoppingListController extends Controller
                 ->with('items.ingredient')
                 ->firstOrFail();
 
-            $groupedItems = $shoppingList->items->groupBy(function ($item) {
-                return $item->ingredient->category;
-            });
+            // Get budget from user profile
+            $mealPlan = \App\Models\MealPlan::find($mealPlanId);
+            $budget = 500;
+            if ($mealPlan) {
+                $profile = \App\Models\UserProfile::where('user_id', $mealPlan->user_id)->first();
+                if ($profile) {
+                    $budget = $profile->budget;
+                }
+            }
 
-            $runningTotal = $shoppingList->items
-                ->where('has_at_home', false)
-                ->sum('estimated_price');
+            // Flatten items for frontend
+            $flatItems = $shoppingList->items->map(function ($item) {
+                return [
+                    'id' => $item->id,
+                    'name' => $item->ingredient->name ?? 'Unknown',
+                    'category' => $item->ingredient->category ?? 'seasonings',
+                    'quantity' => $item->quantity,
+                    'unit' => $item->unit,
+                    'estimated_price' => $item->estimated_price,
+                    'has_at_home' => (bool) $item->has_at_home,
+                    'is_bought' => (bool) $item->is_bought,
+                ];
+            });
 
             return response()->json([
                 'success' => true,
                 'data' => [
-                    'shopping_list' => $shoppingList,
-                    'items_by_category' => $groupedItems,
-                    'total' => round($runningTotal, 2),
+                    'id' => $shoppingList->id,
+                    'budget' => $budget,
+                    'items' => $flatItems,
                 ],
             ]);
         } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
