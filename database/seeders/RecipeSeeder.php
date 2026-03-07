@@ -936,8 +936,18 @@ class RecipeSeeder extends Seeder
             $recipeData['created_at'] = $now;
             $recipeData['updated_at'] = $now;
 
-            // Insert recipe and get ID
-            $recipeId = DB::table('recipes')->insertGetId($recipeData);
+            // Upsert recipe and get ID
+            $existing = DB::table('recipes')->where('name', $recipeData['name'])->first();
+            if ($existing) {
+                DB::table('recipes')->where('id', $existing->id)->update($recipeData);
+                $recipeId = $existing->id;
+                // Clear old relations to re-seed them
+                DB::table('recipe_ingredients')->where('recipe_id', $recipeId)->delete();
+                DB::table('recipe_equipment')->where('recipe_id', $recipeId)->delete();
+                DB::table('recipe_dietary_flags')->where('recipe_id', $recipeId)->delete();
+            } else {
+                $recipeId = DB::table('recipes')->insertGetId($recipeData);
+            }
 
             // Insert recipe_ingredients
             foreach ($recipeIngredients as $ing) {

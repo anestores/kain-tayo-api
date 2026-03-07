@@ -38,7 +38,9 @@ Route::prefix('mobile')->middleware('auth:sanctum')->group(function () {
     Route::get('/meal-plan/active', [MealPlanController::class, 'active']);
     Route::post('/meal-plan/generate', [MealPlanController::class, 'generate']);
     Route::get('/meal-plan/{id}', [MealPlanController::class, 'show']);
+    Route::delete('/meal-plan/{id}', [MealPlanController::class, 'destroy']);
     Route::post('/meal-plan/{id}/swap', [MealPlanController::class, 'swap']);
+    Route::post('/meal-plan/{id}/add', [MealPlanController::class, 'addMeal']);
     Route::get('/meal-plan/{id}/alternatives', [MealPlanController::class, 'alternatives']);
 
     // Shopping Lists
@@ -54,6 +56,7 @@ Route::prefix('mobile')->middleware('auth:sanctum')->group(function () {
     Route::delete('/markets/{id}/favorite', [MarketController::class, 'unfavorite']);
 
     // Recipes
+    Route::get('/recipes', [RecipeController::class, 'index']);
     Route::get('/recipes/{id}', [RecipeController::class, 'show']);
 
     // Recipe History

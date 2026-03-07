@@ -31,6 +31,11 @@ class MealPlanController extends Controller
 
             DB::beginTransaction();
 
+            // Deactivate any existing active plans
+            MealPlan::where('user_id', $user->id)
+                ->where('status', 'active')
+                ->update(['status' => 'inactive']);
+
             $userRestrictionIds = $user->dietaryRestrictions()->pluck('dietary_restrictions.id')->toArray();
             $userEquipmentIds = $user->equipment()->pluck('equipment.id')->toArray();
             $budget = $profile->budget;
@@ -176,6 +181,26 @@ class MealPlanController extends Controller
         }
     }
 
+    public function destroy(Request $request, $id)
+    {
+        try {
+            $user = $request->user();
+
+            // Delete all meal plans for this user
+            MealPlan::where('user_id', $user->id)->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'All meal plans deleted successfully',
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to delete meal plans',
+            ], 500);
+        }
+    }
+
     public function swap(Request $request, $id)
     {
         $validator = Validator::make($request->all(), [
@@ -312,6 +337,85 @@ class MealPlanController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to retrieve alternatives',
+            ], 500);
+        }
+    }
+
+    public function addMeal(Request $request, $id)
+    {
+        $validator = Validator::make($request->all(), [
+            'day_number' => 'required|integer|min:1|max:7',
+            'meal_type' => 'required|in:almusal,tanghalian,merienda,hapunan',
+            'recipe_id' => 'required|exists:recipes,id',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Validation error',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
+        try {
+            DB::beginTransaction();
+
+            $user = $request->user();
+            $mealPlan = MealPlan::where('user_id', $user->id)->findOrFail($id);
+
+            // Check if slot already has a meal — if so, update it (swap)
+            $existing = MealPlanItem::where('meal_plan_id', $mealPlan->id)
+                ->where('day_number', $request->day_number)
+                ->where('meal_type', $request->meal_type)
+                ->first();
+
+            if ($existing) {
+                $existing->update(['recipe_id' => $request->recipe_id]);
+            } else {
+                MealPlanItem::create([
+                    'meal_plan_id' => $mealPlan->id,
+                    'recipe_id' => $request->recipe_id,
+                    'day_number' => $request->day_number,
+                    'meal_type' => $request->meal_type,
+                ]);
+            }
+
+            // Recalculate total cost
+            $totalCost = 0;
+            $mealPlan->load('items.recipe.ingredients');
+            foreach ($mealPlan->items as $planItem) {
+                $recipeCost = $planItem->recipe->ingredients()->sum('recipe_ingredients.estimated_cost');
+                $totalCost += $recipeCost;
+            }
+            $mealPlan->update(['total_cost' => $totalCost]);
+
+            // Regenerate shopping list
+            $this->generateShoppingList($mealPlan, $user->id);
+
+            DB::commit();
+
+            $mealPlan->load(['items.recipe.ingredients', 'items.recipe.equipment', 'shoppingList.items.ingredient']);
+            $groupedItems = $mealPlan->items->groupBy('day_number');
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Meal added successfully',
+                'data' => [
+                    'meal_plan' => $mealPlan,
+                    'days' => $groupedItems,
+                ],
+            ]);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Meal plan not found',
+            ], 404);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to add meal',
             ], 500);
         }
     }
