@@ -92,7 +92,7 @@ class AIMealPlanService
             $systemPrompt = <<<SYSTEM
 Filipino meal planner. Create 4 meals for Day {$day}: almusal, tanghalian, merienda, hapunan. Real Filipino dishes only.
 
-ENUMS: meal_type: almusal|tanghalian|merienda|hapunan. difficulty: madali|katamtaman|mahirap. ingredient category: karne|isda|gulay|prutas|bigas_at_butil|gatas_at_itlog|pampalasa|iba_pa.
+ENUMS: meal_type: almusal|tanghalian|merienda|hapunan. difficulty: madali|katamtaman|mahirap. ingredient category: karne|isda|gulay|prutas|bigas_at_butil|gatas_at_itlog|pampalasa|iba_pa|karne_isda|bigas_butil.
 
 RULES: Realistic PH market prices in pesos. Respect dietary restrictions & budget. Keep instructions short (2-4 steps). Keep ingredients to 3-6 per recipe. Merienda should be simple/light.{$avoidList}
 
@@ -225,6 +225,32 @@ SYSTEM;
         }
     }
 
+    private const VALID_CATEGORIES = [
+        'karne_isda', 'gulay', 'bigas_butil', 'pampalasa',
+        'karne', 'isda', 'prutas', 'bigas_at_butil', 'gatas_at_itlog', 'iba_pa',
+    ];
+
+    private const CATEGORY_MAP = [
+        'meat' => 'karne',
+        'fish' => 'isda',
+        'seafood' => 'isda',
+        'vegetable' => 'gulay',
+        'vegetables' => 'gulay',
+        'fruit' => 'prutas',
+        'fruits' => 'prutas',
+        'rice' => 'bigas_butil',
+        'grain' => 'bigas_butil',
+        'grains' => 'bigas_butil',
+        'dairy' => 'gatas_at_itlog',
+        'egg' => 'gatas_at_itlog',
+        'eggs' => 'gatas_at_itlog',
+        'spice' => 'pampalasa',
+        'spices' => 'pampalasa',
+        'condiment' => 'pampalasa',
+        'seasoning' => 'pampalasa',
+        'other' => 'iba_pa',
+    ];
+
     /**
      * Find existing ingredient by name (fuzzy) or create a new one.
      */
@@ -246,13 +272,33 @@ SYSTEM;
             return $ingredient;
         }
 
-        // Create new ingredient
-        Log::info('AI Meal Plan: Creating new ingredient', ['name' => $name, 'category' => $data['category'] ?? 'iba_pa']);
+        // Sanitize category to a valid ENUM value
+        $category = $this->sanitizeCategory($data['category'] ?? 'iba_pa');
+
+        Log::info('AI Meal Plan: Creating new ingredient', ['name' => $name, 'category' => $category]);
         return Ingredient::create([
             'name' => $name,
-            'category' => $data['category'] ?? 'iba_pa',
+            'category' => $category,
             'estimated_price' => $data['estimated_cost'] ?? 0,
             'unit' => $data['unit'] ?? 'pc',
         ]);
+    }
+
+    /**
+     * Map AI-generated category to a valid DB ENUM value.
+     */
+    private function sanitizeCategory(string $category): string
+    {
+        $lower = Str::lower(trim($category));
+
+        if (in_array($lower, self::VALID_CATEGORIES)) {
+            return $lower;
+        }
+
+        if (isset(self::CATEGORY_MAP[$lower])) {
+            return self::CATEGORY_MAP[$lower];
+        }
+
+        return 'iba_pa';
     }
 }
