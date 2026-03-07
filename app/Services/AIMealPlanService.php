@@ -11,9 +11,17 @@ use Illuminate\Support\Str;
 
 class AIMealPlanService
 {
+    private string $model;
+    private string $apiKey;
+
+    public function __construct()
+    {
+        $this->model = config('services.openai.model', 'gpt-4o-mini');
+        $this->apiKey = config('services.openai.api_key');
+    }
+
     /**
-     * Generate a meal plan using OpenAI — all recipes are AI-created.
-     * Returns array of ['day' => int, 'meal_type' => string, 'recipe_id' => int] or null on failure.
+     * Generate a 7-day meal plan by calling OpenAI once per day (7 calls of 4 meals each).
      */
     public function generatePlan(User $user, string $prompt): ?array
     {
@@ -23,7 +31,6 @@ class AIMealPlanService
             $restrictions = $user->dietaryRestrictions()->pluck('name')->toArray();
             $equipment = $user->equipment()->pluck('name')->toArray();
 
-            // Build household description
             $householdDesc = $members->map(function ($m) {
                 $desc = "{$m->name}: {$m->gender}, {$m->age} yrs, {$m->activity_level}";
                 if ($m->is_pregnant) $desc .= ', pregnant';
@@ -32,108 +39,42 @@ class AIMealPlanService
                 return $desc;
             })->implode("\n");
 
-            $systemPrompt = <<<'SYSTEM'
-You are a Filipino meal planning assistant for PlanTipid, a budget meal planning app.
-
-Create a 7-day meal plan with 4 meals per day (almusal, tanghalian, merienda, hapunan = 28 total).
-Every recipe must be a REAL Filipino dish with complete details.
-
-RULES:
-- All recipes must be realistic, culturally appropriate Filipino dishes
-- Include accurate nutrition estimates (calories, protein in g, iron in mg, vitamin_c in mg)
-- Ingredient costs must be realistic Philippine market prices in pesos
-- Respect dietary restrictions, health conditions, and budget
-- Minimize repetition — use different recipes each day
-- meal_type must be one of: almusal, tanghalian, merienda, hapunan
-- difficulty must be one of: madali, katamtaman, mahirap
-- Ingredient categories: karne, isda, gulay, prutas, bigas_at_butil, gatas_at_itlog, pampalasa, iba_pa
-
-Return ONLY valid JSON with this structure:
-{
-  "plan": [
-    {
-      "day": 1,
-      "meal_type": "almusal",
-      "recipe": {
-        "name": "Champorado",
-        "description": "Sweet chocolate rice porridge",
-        "meal_type": "almusal",
-        "difficulty": "madali",
-        "cook_time_minutes": 25,
-        "servings": 4,
-        "calories": 280.00,
-        "protein": 6.50,
-        "iron": 1.80,
-        "vitamin_c": 0.50,
-        "instructions": ["Pakuluan ang bigas sa tubig.", "Idagdag ang cocoa powder at asukal.", "Haluin hanggang lumapot."],
-        "ingredients": [
-          {"name": "Bigas (malagkit)", "category": "bigas_at_butil", "quantity": 200, "unit": "g", "estimated_cost": 25.00},
-          {"name": "Cocoa powder", "category": "pampalasa", "quantity": 30, "unit": "g", "estimated_cost": 15.00},
-          {"name": "Asukal", "category": "pampalasa", "quantity": 50, "unit": "g", "estimated_cost": 5.00}
-        ]
-      }
-    }
-  ]
-}
-
-You must return exactly 28 items (7 days x 4 meals). Every item must have a full "recipe" object.
-SYSTEM;
-
-            $userMessage = "HOUSEHOLD:\n{$householdDesc}\n\n"
-                . "Budget: ₱" . number_format($profile->budget ?? 500, 0) . "/week\n"
+            $context = "HOUSEHOLD:\n{$householdDesc}\n"
+                . "Budget: PHP " . number_format($profile->budget ?? 500, 0) . "/week\n"
                 . "Equipment: " . (empty($equipment) ? 'basic kitchen' : implode(', ', $equipment)) . "\n"
-                . "Dietary restrictions: " . (empty($restrictions) ? 'none' : implode(', ', $restrictions)) . "\n\n"
+                . "Dietary restrictions: " . (empty($restrictions) ? 'none' : implode(', ', $restrictions)) . "\n"
                 . "USER REQUEST: {$prompt}";
 
-            $model = config('services.openai.model', 'gpt-4o-mini');
-            Log::info('AI Meal Plan: Calling OpenAI API', [
+            Log::info('AI Meal Plan: Starting batch generation', [
                 'user_id' => $user->id,
-                'model' => $model,
-                'prompt_length' => strlen($userMessage),
+                'model' => $this->model,
                 'household_members' => $members->count(),
                 'budget' => $profile->budget ?? 500,
+                'prompt' => $prompt,
             ]);
 
-            $response = Http::withHeaders([
-                'Authorization' => 'Bearer ' . config('services.openai.api_key'),
-                'Content-Type' => 'application/json',
-            ])->timeout(120)->post('https://api.openai.com/v1/chat/completions', [
-                'model' => config('services.openai.model', 'gpt-4o-mini'),
-                'messages' => [
-                    ['role' => 'system', 'content' => $systemPrompt],
-                    ['role' => 'user', 'content' => $userMessage],
-                ],
-                'temperature' => 0.7,
-                'max_tokens' => 16000,
-                'response_format' => ['type' => 'json_object'],
-            ]);
+            $allResults = [];
+            $usedRecipes = [];
 
-            if (!$response->successful()) {
-                Log::error('OpenAI API error', ['status' => $response->status(), 'body' => $response->body()]);
-                return null;
+            for ($day = 1; $day <= 7; $day++) {
+                Log::info("AI Meal Plan: Generating day {$day}/7");
+
+                $dayResult = $this->generateDay($day, $context, $usedRecipes);
+
+                if ($dayResult) {
+                    foreach ($dayResult as $item) {
+                        $allResults[] = $item;
+                        $usedRecipes[] = $item['recipe_name'] ?? '';
+                    }
+                    Log::info("AI Meal Plan: Day {$day} complete", ['meals' => count($dayResult)]);
+                } else {
+                    Log::warning("AI Meal Plan: Day {$day} failed, will be filled with random recipes");
+                }
             }
 
-            $usage = $response->json('usage');
-            Log::info('AI Meal Plan: OpenAI response received', [
-                'prompt_tokens' => $usage['prompt_tokens'] ?? 'N/A',
-                'completion_tokens' => $usage['completion_tokens'] ?? 'N/A',
-                'total_tokens' => $usage['total_tokens'] ?? 'N/A',
-            ]);
+            Log::info('AI Meal Plan: Batch generation complete', ['total_meals' => count($allResults)]);
 
-            $content = $response->json('choices.0.message.content');
-            $parsed = json_decode($content, true);
-
-            // Extract the plan array
-            $plan = $parsed['plan'] ?? $parsed['meal_plan'] ?? $parsed['meals'] ?? $parsed;
-            if (!is_array($plan) || empty($plan)) {
-                Log::error('OpenAI returned invalid format', ['content' => $content]);
-                return null;
-            }
-
-            Log::info('AI Meal Plan: Parsed plan items', ['count' => count($plan)]);
-
-            // Process: save all new recipes to DB
-            return $this->processPlan($plan);
+            return !empty($allResults) ? $allResults : null;
         } catch (\Exception $e) {
             Log::error('AI meal plan generation failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             return null;
@@ -141,31 +82,92 @@ SYSTEM;
     }
 
     /**
-     * Process AI plan: save all recipes to DB, return normalized plan with recipe_ids.
+     * Generate 4 meals for a single day via OpenAI.
      */
-    private function processPlan(array $plan): ?array
+    private function generateDay(int $day, string $context, array $usedRecipes): ?array
+    {
+        try {
+            $avoidList = !empty($usedRecipes) ? "\nAVOID these dishes (already used): " . implode(', ', array_unique($usedRecipes)) : '';
+
+            $systemPrompt = <<<SYSTEM
+Filipino meal planner. Create 4 meals for Day {$day}: almusal, tanghalian, merienda, hapunan. Real Filipino dishes only.
+
+ENUMS: meal_type: almusal|tanghalian|merienda|hapunan. difficulty: madali|katamtaman|mahirap. ingredient category: karne|isda|gulay|prutas|bigas_at_butil|gatas_at_itlog|pampalasa|iba_pa.
+
+RULES: Realistic PH market prices in pesos. Respect dietary restrictions & budget. Keep instructions short (2-4 steps). Keep ingredients to 3-6 per recipe. Merienda should be simple/light.{$avoidList}
+
+Return ONLY JSON:
+{"meals":[{"meal_type":"almusal","recipe":{"name":"Champorado","description":"Sweet chocolate rice porridge","meal_type":"almusal","difficulty":"madali","cook_time_minutes":25,"servings":4,"calories":280,"protein":6.5,"iron":1.8,"vitamin_c":0.5,"instructions":["Pakuluan ang bigas.","Idagdag cocoa at asukal."],"ingredients":[{"name":"Bigas malagkit","category":"bigas_at_butil","quantity":200,"unit":"g","estimated_cost":25}]}}]}
+
+Exactly 4 meals. Every meal needs full recipe object.
+SYSTEM;
+
+            $response = Http::withHeaders([
+                'Authorization' => 'Bearer ' . $this->apiKey,
+                'Content-Type' => 'application/json',
+            ])->timeout(60)->post('https://api.openai.com/v1/chat/completions', [
+                'model' => $this->model,
+                'messages' => [
+                    ['role' => 'system', 'content' => $systemPrompt],
+                    ['role' => 'user', 'content' => $context],
+                ],
+                'temperature' => 0.7,
+                'max_tokens' => 4000,
+                'response_format' => ['type' => 'json_object'],
+            ]);
+
+            if (!$response->successful()) {
+                Log::error("AI Meal Plan: OpenAI error for day {$day}", ['status' => $response->status(), 'body' => $response->body()]);
+                return null;
+            }
+
+            $usage = $response->json('usage');
+            Log::info("AI Meal Plan: Day {$day} response received", [
+                'prompt_tokens' => $usage['prompt_tokens'] ?? 'N/A',
+                'completion_tokens' => $usage['completion_tokens'] ?? 'N/A',
+            ]);
+
+            $content = $response->json('choices.0.message.content');
+            $parsed = json_decode($content, true);
+
+            $meals = $parsed['meals'] ?? $parsed['plan'] ?? $parsed;
+            if (!is_array($meals) || empty($meals)) {
+                Log::error("AI Meal Plan: Invalid format for day {$day}", ['content' => $content]);
+                return null;
+            }
+
+            return $this->processDayMeals($day, $meals);
+        } catch (\Exception $e) {
+            Log::error("AI Meal Plan: Day {$day} exception", ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Process meals for a single day: save recipes to DB, return plan items.
+     */
+    private function processDayMeals(int $day, array $meals): ?array
     {
         $result = [];
-        $skipped = 0;
 
-        foreach ($plan as $index => $item) {
-            $day = $item['day'] ?? null;
+        foreach ($meals as $item) {
             $mealType = $item['meal_type'] ?? null;
-
-            if (!$day || !$mealType) { $skipped++; continue; }
-            if (!in_array($mealType, ['almusal', 'tanghalian', 'merienda', 'hapunan'])) { $skipped++; continue; }
+            if (!$mealType || !in_array($mealType, ['almusal', 'tanghalian', 'merienda', 'hapunan'])) continue;
 
             if (!empty($item['recipe'])) {
                 $recipeId = $this->saveNewRecipe($item['recipe']);
                 if ($recipeId) {
-                    $result[] = ['day' => $day, 'meal_type' => $mealType, 'recipe_id' => $recipeId];
+                    $result[] = [
+                        'day' => $day,
+                        'meal_type' => $mealType,
+                        'recipe_id' => $recipeId,
+                        'recipe_name' => $item['recipe']['name'] ?? '',
+                    ];
                 } else {
-                    Log::warning('AI Meal Plan: Failed to save recipe for slot', ['day' => $day, 'meal_type' => $mealType, 'recipe_name' => $item['recipe']['name'] ?? 'unknown']);
+                    Log::warning("AI Meal Plan: Failed to save recipe", ['day' => $day, 'meal_type' => $mealType, 'name' => $item['recipe']['name'] ?? 'unknown']);
                 }
             }
         }
-
-        Log::info('AI Meal Plan: processPlan complete', ['saved' => count($result), 'skipped' => $skipped, 'total_input' => count($plan)]);
 
         return !empty($result) ? $result : null;
     }
@@ -201,7 +203,6 @@ SYSTEM;
                 'ai_generated' => true,
             ]);
 
-            // Save ingredients
             $ingredientCount = 0;
             if (!empty($data['ingredients'])) {
                 foreach ($data['ingredients'] as $ingData) {
@@ -235,7 +236,6 @@ SYSTEM;
         $ingredient = Ingredient::whereRaw('LOWER(name) = ?', [Str::lower($name)])->first();
 
         if ($ingredient) {
-            Log::debug('AI Meal Plan: Ingredient matched (exact)', ['name' => $name, 'id' => $ingredient->id]);
             return $ingredient;
         }
 
@@ -243,7 +243,6 @@ SYSTEM;
         $ingredient = Ingredient::whereRaw('LOWER(name) LIKE ?', ['%' . Str::lower($name) . '%'])->first();
 
         if ($ingredient) {
-            Log::debug('AI Meal Plan: Ingredient matched (partial)', ['search' => $name, 'matched' => $ingredient->name, 'id' => $ingredient->id]);
             return $ingredient;
         }
 
