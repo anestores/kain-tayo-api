@@ -85,6 +85,15 @@ SYSTEM;
                 . "Dietary restrictions: " . (empty($restrictions) ? 'none' : implode(', ', $restrictions)) . "\n\n"
                 . "USER REQUEST: {$prompt}";
 
+            $model = config('services.openai.model', 'gpt-4o-mini');
+            Log::info('AI Meal Plan: Calling OpenAI API', [
+                'user_id' => $user->id,
+                'model' => $model,
+                'prompt_length' => strlen($userMessage),
+                'household_members' => $members->count(),
+                'budget' => $profile->budget ?? 500,
+            ]);
+
             $response = Http::withHeaders([
                 'Authorization' => 'Bearer ' . config('services.openai.api_key'),
                 'Content-Type' => 'application/json',
@@ -104,6 +113,13 @@ SYSTEM;
                 return null;
             }
 
+            $usage = $response->json('usage');
+            Log::info('AI Meal Plan: OpenAI response received', [
+                'prompt_tokens' => $usage['prompt_tokens'] ?? 'N/A',
+                'completion_tokens' => $usage['completion_tokens'] ?? 'N/A',
+                'total_tokens' => $usage['total_tokens'] ?? 'N/A',
+            ]);
+
             $content = $response->json('choices.0.message.content');
             $parsed = json_decode($content, true);
 
@@ -113,6 +129,8 @@ SYSTEM;
                 Log::error('OpenAI returned invalid format', ['content' => $content]);
                 return null;
             }
+
+            Log::info('AI Meal Plan: Parsed plan items', ['count' => count($plan)]);
 
             // Process: save all new recipes to DB
             return $this->processPlan($plan);
@@ -128,21 +146,26 @@ SYSTEM;
     private function processPlan(array $plan): ?array
     {
         $result = [];
+        $skipped = 0;
 
-        foreach ($plan as $item) {
+        foreach ($plan as $index => $item) {
             $day = $item['day'] ?? null;
             $mealType = $item['meal_type'] ?? null;
 
-            if (!$day || !$mealType) continue;
-            if (!in_array($mealType, ['almusal', 'tanghalian', 'merienda', 'hapunan'])) continue;
+            if (!$day || !$mealType) { $skipped++; continue; }
+            if (!in_array($mealType, ['almusal', 'tanghalian', 'merienda', 'hapunan'])) { $skipped++; continue; }
 
             if (!empty($item['recipe'])) {
                 $recipeId = $this->saveNewRecipe($item['recipe']);
                 if ($recipeId) {
                     $result[] = ['day' => $day, 'meal_type' => $mealType, 'recipe_id' => $recipeId];
+                } else {
+                    Log::warning('AI Meal Plan: Failed to save recipe for slot', ['day' => $day, 'meal_type' => $mealType, 'recipe_name' => $item['recipe']['name'] ?? 'unknown']);
                 }
             }
         }
+
+        Log::info('AI Meal Plan: processPlan complete', ['saved' => count($result), 'skipped' => $skipped, 'total_input' => count($plan)]);
 
         return !empty($result) ? $result : null;
     }
@@ -179,6 +202,7 @@ SYSTEM;
             ]);
 
             // Save ingredients
+            $ingredientCount = 0;
             if (!empty($data['ingredients'])) {
                 foreach ($data['ingredients'] as $ingData) {
                     $ingredient = $this->findOrCreateIngredient($ingData);
@@ -187,8 +211,11 @@ SYSTEM;
                         'unit' => $ingData['unit'] ?? 'pc',
                         'estimated_cost' => $ingData['estimated_cost'] ?? 0,
                     ]);
+                    $ingredientCount++;
                 }
             }
+
+            Log::info('AI Meal Plan: Recipe saved', ['recipe_id' => $recipe->id, 'name' => $recipe->name, 'ingredients' => $ingredientCount]);
 
             return $recipe->id;
         } catch (\Exception $e) {
@@ -208,6 +235,7 @@ SYSTEM;
         $ingredient = Ingredient::whereRaw('LOWER(name) = ?', [Str::lower($name)])->first();
 
         if ($ingredient) {
+            Log::debug('AI Meal Plan: Ingredient matched (exact)', ['name' => $name, 'id' => $ingredient->id]);
             return $ingredient;
         }
 
@@ -215,10 +243,12 @@ SYSTEM;
         $ingredient = Ingredient::whereRaw('LOWER(name) LIKE ?', ['%' . Str::lower($name) . '%'])->first();
 
         if ($ingredient) {
+            Log::debug('AI Meal Plan: Ingredient matched (partial)', ['search' => $name, 'matched' => $ingredient->name, 'id' => $ingredient->id]);
             return $ingredient;
         }
 
         // Create new ingredient
+        Log::info('AI Meal Plan: Creating new ingredient', ['name' => $name, 'category' => $data['category'] ?? 'iba_pa']);
         return Ingredient::create([
             'name' => $name,
             'category' => $data['category'] ?? 'iba_pa',

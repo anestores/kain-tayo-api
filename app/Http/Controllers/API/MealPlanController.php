@@ -13,6 +13,7 @@ use App\Services\AIMealPlanService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 
 class MealPlanController extends Controller
@@ -35,8 +36,12 @@ class MealPlanController extends Controller
 
             // If prompt provided, try AI generation
             if ($prompt) {
+                Log::info('AI meal plan requested', ['user_id' => $user->id, 'prompt' => $prompt]);
                 $aiService = new AIMealPlanService();
                 $aiPlan = $aiService->generatePlan($user, $prompt);
+                Log::info('AI meal plan result', ['user_id' => $user->id, 'items_count' => $aiPlan ? count($aiPlan) : 0, 'success' => !is_null($aiPlan)]);
+            } else {
+                Log::info('Random meal plan requested', ['user_id' => $user->id]);
             }
 
             DB::beginTransaction();
@@ -123,6 +128,14 @@ class MealPlanController extends Controller
 
             $groupedItems = $mealPlan->items->groupBy('day_number');
 
+            Log::info('Meal plan generated successfully', [
+                'user_id' => $user->id,
+                'meal_plan_id' => $mealPlan->id,
+                'ai_powered' => !is_null($aiPlan),
+                'total_items' => $mealPlan->items->count(),
+                'total_cost' => $totalCost,
+            ]);
+
             return response()->json([
                 'success' => true,
                 'message' => $aiPlan ? 'AI meal plan generated successfully' : 'Meal plan generated successfully',
@@ -133,6 +146,7 @@ class MealPlanController extends Controller
             ], 201);
         } catch (\Exception $e) {
             DB::rollBack();
+            Log::error('Failed to generate meal plan', ['user_id' => $user->id ?? null, 'error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
 
             return response()->json([
                 'success' => false,
