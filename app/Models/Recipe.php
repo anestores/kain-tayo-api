@@ -23,6 +23,7 @@ class Recipe extends Model
         'vitamin_c',
         'instructions',
         'image_path',
+        'ai_generated',
     ];
 
     protected function casts(): array
@@ -35,6 +36,7 @@ class Recipe extends Model
             'protein' => 'decimal:2',
             'iron' => 'decimal:2',
             'vitamin_c' => 'decimal:2',
+            'ai_generated' => 'boolean',
         ];
     }
 

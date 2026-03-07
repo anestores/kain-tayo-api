@@ -54,8 +54,13 @@ class MealPlanController extends Controller
 
             $totalCost = 0;
 
+            $mealTypes = ['almusal', 'tanghalian', 'merienda', 'hapunan'];
+            $userRestrictionIds = $user->dietaryRestrictions()->pluck('dietary_restrictions.id')->toArray();
+            $userEquipmentIds = $user->equipment()->pluck('equipment.id')->toArray();
+
+            // Build a map of filled slots from AI plan
+            $filledSlots = [];
             if ($aiPlan) {
-                // Use AI-generated plan
                 foreach ($aiPlan as $item) {
                     $recipe = Recipe::find($item['recipe_id']);
                     if ($recipe) {
@@ -67,49 +72,42 @@ class MealPlanController extends Controller
                         ]);
                         $recipeCost = $recipe->ingredients()->sum('recipe_ingredients.estimated_cost');
                         $totalCost += $recipeCost;
+                        $filledSlots["{$item['day']}-{$item['meal_type']}"] = true;
                     }
                 }
-            } else {
-                // Fallback: random generation
-                $userRestrictionIds = $user->dietaryRestrictions()->pluck('dietary_restrictions.id')->toArray();
-                $userEquipmentIds = $user->equipment()->pluck('equipment.id')->toArray();
-                $mealTypes = ['almusal', 'tanghalian', 'merienda', 'hapunan'];
-                $allRecipeIds = [];
+            }
 
-                foreach (range(1, 7) as $day) {
-                    foreach ($mealTypes as $mealType) {
-                        $recipe = $this->findSuitableRecipe(
-                            $mealType,
-                            $userRestrictionIds,
-                            $userEquipmentIds,
-                            $allRecipeIds
-                        );
+            // Fill any missing slots with random recipes
+            $allRecipeIds = $mealPlan->items()->pluck('recipe_id')->toArray();
+            foreach (range(1, 7) as $day) {
+                foreach ($mealTypes as $mealType) {
+                    if (isset($filledSlots["{$day}-{$mealType}"])) continue;
 
-                        if (!$recipe) {
-                            $recipe = Recipe::where('meal_type', $mealType)
-                                ->whereNotIn('id', $allRecipeIds)
-                                ->inRandomOrder()
-                                ->first();
-                        }
+                    $recipe = $this->findSuitableRecipe($mealType, $userRestrictionIds, $userEquipmentIds, $allRecipeIds);
 
-                        if (!$recipe) {
-                            $recipe = Recipe::where('meal_type', $mealType)
-                                ->inRandomOrder()
-                                ->first();
-                        }
+                    if (!$recipe) {
+                        $recipe = Recipe::where('meal_type', $mealType)
+                            ->whereNotIn('id', $allRecipeIds)
+                            ->inRandomOrder()
+                            ->first();
+                    }
 
-                        if ($recipe) {
-                            MealPlanItem::create([
-                                'meal_plan_id' => $mealPlan->id,
-                                'recipe_id' => $recipe->id,
-                                'day_number' => $day,
-                                'meal_type' => $mealType,
-                            ]);
+                    if (!$recipe) {
+                        $recipe = Recipe::where('meal_type', $mealType)
+                            ->inRandomOrder()
+                            ->first();
+                    }
 
-                            $allRecipeIds[] = $recipe->id;
-                            $recipeCost = $recipe->ingredients()->sum('recipe_ingredients.estimated_cost');
-                            $totalCost += $recipeCost;
-                        }
+                    if ($recipe) {
+                        MealPlanItem::create([
+                            'meal_plan_id' => $mealPlan->id,
+                            'recipe_id' => $recipe->id,
+                            'day_number' => $day,
+                            'meal_type' => $mealType,
+                        ]);
+                        $allRecipeIds[] = $recipe->id;
+                        $recipeCost = $recipe->ingredients()->sum('recipe_ingredients.estimated_cost');
+                        $totalCost += $recipeCost;
                     }
                 }
             }
