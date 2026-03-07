@@ -9,6 +9,7 @@ use App\Models\MealPlanItem;
 use App\Models\Recipe;
 use App\Models\ShoppingList;
 use App\Models\ShoppingListItem;
+use App\Services\AIMealPlanService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -29,18 +30,21 @@ class MealPlanController extends Controller
                 ], 404);
             }
 
+            $prompt = $request->input('prompt');
+            $aiPlan = null;
+
+            // If prompt provided, try AI generation
+            if ($prompt) {
+                $aiService = new AIMealPlanService();
+                $aiPlan = $aiService->generatePlan($user, $prompt);
+            }
+
             DB::beginTransaction();
 
             // Deactivate any existing active plans
             MealPlan::where('user_id', $user->id)
                 ->where('status', 'active')
                 ->update(['status' => 'inactive']);
-
-            $userRestrictionIds = $user->dietaryRestrictions()->pluck('dietary_restrictions.id')->toArray();
-            $userEquipmentIds = $user->equipment()->pluck('equipment.id')->toArray();
-            $budget = $profile->budget;
-
-            $mealTypes = ['almusal', 'tanghalian', 'merienda', 'hapunan'];
 
             $mealPlan = MealPlan::create([
                 'user_id' => $user->id,
@@ -49,43 +53,63 @@ class MealPlanController extends Controller
             ]);
 
             $totalCost = 0;
-            $allRecipeIds = [];
 
-            foreach (range(1, 7) as $day) {
-                foreach ($mealTypes as $mealType) {
-                    $recipe = $this->findSuitableRecipe(
-                        $mealType,
-                        $userRestrictionIds,
-                        $userEquipmentIds,
-                        $allRecipeIds
-                    );
-
-                    if (!$recipe) {
-                        // Fallback: get any recipe of this meal type
-                        $recipe = Recipe::where('meal_type', $mealType)
-                            ->whereNotIn('id', $allRecipeIds)
-                            ->inRandomOrder()
-                            ->first();
-                    }
-
-                    if (!$recipe) {
-                        // Last resort: reuse recipes
-                        $recipe = Recipe::where('meal_type', $mealType)
-                            ->inRandomOrder()
-                            ->first();
-                    }
-
+            if ($aiPlan) {
+                // Use AI-generated plan
+                foreach ($aiPlan as $item) {
+                    $recipe = Recipe::find($item['recipe_id']);
                     if ($recipe) {
                         MealPlanItem::create([
                             'meal_plan_id' => $mealPlan->id,
                             'recipe_id' => $recipe->id,
-                            'day_number' => $day,
-                            'meal_type' => $mealType,
+                            'day_number' => $item['day'],
+                            'meal_type' => $item['meal_type'],
                         ]);
-
-                        $allRecipeIds[] = $recipe->id;
                         $recipeCost = $recipe->ingredients()->sum('recipe_ingredients.estimated_cost');
                         $totalCost += $recipeCost;
+                    }
+                }
+            } else {
+                // Fallback: random generation
+                $userRestrictionIds = $user->dietaryRestrictions()->pluck('dietary_restrictions.id')->toArray();
+                $userEquipmentIds = $user->equipment()->pluck('equipment.id')->toArray();
+                $mealTypes = ['almusal', 'tanghalian', 'merienda', 'hapunan'];
+                $allRecipeIds = [];
+
+                foreach (range(1, 7) as $day) {
+                    foreach ($mealTypes as $mealType) {
+                        $recipe = $this->findSuitableRecipe(
+                            $mealType,
+                            $userRestrictionIds,
+                            $userEquipmentIds,
+                            $allRecipeIds
+                        );
+
+                        if (!$recipe) {
+                            $recipe = Recipe::where('meal_type', $mealType)
+                                ->whereNotIn('id', $allRecipeIds)
+                                ->inRandomOrder()
+                                ->first();
+                        }
+
+                        if (!$recipe) {
+                            $recipe = Recipe::where('meal_type', $mealType)
+                                ->inRandomOrder()
+                                ->first();
+                        }
+
+                        if ($recipe) {
+                            MealPlanItem::create([
+                                'meal_plan_id' => $mealPlan->id,
+                                'recipe_id' => $recipe->id,
+                                'day_number' => $day,
+                                'meal_type' => $mealType,
+                            ]);
+
+                            $allRecipeIds[] = $recipe->id;
+                            $recipeCost = $recipe->ingredients()->sum('recipe_ingredients.estimated_cost');
+                            $totalCost += $recipeCost;
+                        }
                     }
                 }
             }
@@ -103,7 +127,7 @@ class MealPlanController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Meal plan generated successfully',
+                'message' => $aiPlan ? 'AI meal plan generated successfully' : 'Meal plan generated successfully',
                 'data' => [
                     'meal_plan' => $mealPlan,
                     'days' => $groupedItems,
