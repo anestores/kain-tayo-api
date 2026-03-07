@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API;
 use App\Http\Controllers\Controller;
 use App\Models\DietaryRestriction;
 use App\Models\Equipment;
+use App\Models\HouseholdMember;
 use App\Models\UserDietaryRestriction;
 use App\Models\UserEquipment;
 use App\Models\UserProfile;
@@ -29,6 +30,14 @@ class ProfileController extends Controller
             'lifestyle_preferences.*' => 'string|max:255',
             'equipment' => 'nullable|array',
             'equipment.*' => 'string|max:255',
+            'household_members' => 'nullable|array',
+            'household_members.*.name' => 'required_with:household_members|string|max:255',
+            'household_members.*.gender' => 'required_with:household_members|in:lalaki,babae,iba',
+            'household_members.*.age' => 'required_with:household_members|integer|min:0|max:120',
+            'household_members.*.activity_level' => 'nullable|in:sedentary,moderate,active,very_active',
+            'household_members.*.dietary_restrictions' => 'nullable|array',
+            'household_members.*.health_conditions' => 'nullable|array',
+            'household_members.*.is_pregnant' => 'nullable|boolean',
         ]);
 
         if ($validator->fails()) {
@@ -44,15 +53,35 @@ class ProfileController extends Controller
 
             $user = $request->user();
 
+            $memberCount = $request->household_members ? count($request->household_members) : $request->household_count;
+
             $profile = UserProfile::updateOrCreate(
                 ['user_id' => $user->id],
                 [
-                    'household_count' => $request->household_count,
+                    'household_count' => $memberCount,
                     'household_type' => $request->household_type,
                     'budget' => $request->budget,
                     'language_code' => $request->language_code ?? 'fil',
                 ]
             );
+
+            // Sync household members
+            if ($request->household_members) {
+                HouseholdMember::where('user_id', $user->id)->delete();
+
+                foreach ($request->household_members as $member) {
+                    HouseholdMember::create([
+                        'user_id' => $user->id,
+                        'name' => $member['name'],
+                        'gender' => $member['gender'] ?? 'iba',
+                        'age' => $member['age'] ?? 25,
+                        'activity_level' => $member['activity_level'] ?? 'moderate',
+                        'dietary_restrictions' => $member['dietary_restrictions'] ?? [],
+                        'health_conditions' => $member['health_conditions'] ?? [],
+                        'is_pregnant' => $member['is_pregnant'] ?? false,
+                    ]);
+                }
+            }
 
             // Sync dietary restrictions (by name)
             UserDietaryRestriction::where('user_id', $user->id)->delete();
@@ -127,6 +156,7 @@ class ProfileController extends Controller
                     'profile' => $profile->fresh(),
                     'dietary_restrictions' => $user->dietaryRestrictions()->get(),
                     'equipment' => $user->equipment()->get(),
+                    'household_members' => $user->householdMembers()->get(),
                 ],
             ], 201);
         } catch (\Exception $e) {
@@ -158,6 +188,7 @@ class ProfileController extends Controller
                     'profile' => $profile,
                     'dietary_restrictions' => $user->dietaryRestrictions()->get(),
                     'equipment' => $user->equipment()->get(),
+                    'household_members' => $user->householdMembers()->get(),
                 ],
             ]);
         } catch (\Exception $e) {
@@ -183,6 +214,14 @@ class ProfileController extends Controller
             'lifestyle_preferences.*' => 'string|max:255',
             'equipment' => 'sometimes|nullable|array',
             'equipment.*' => 'string|max:255',
+            'household_members' => 'sometimes|nullable|array',
+            'household_members.*.name' => 'required_with:household_members|string|max:255',
+            'household_members.*.gender' => 'required_with:household_members|in:lalaki,babae,iba',
+            'household_members.*.age' => 'required_with:household_members|integer|min:0|max:120',
+            'household_members.*.activity_level' => 'nullable|in:sedentary,moderate,active,very_active',
+            'household_members.*.dietary_restrictions' => 'nullable|array',
+            'household_members.*.health_conditions' => 'nullable|array',
+            'household_members.*.is_pregnant' => 'nullable|boolean',
         ]);
 
         if ($validator->fails()) {
@@ -256,6 +295,29 @@ class ProfileController extends Controller
                             'custom_name' => $customName,
                         ]);
                     }
+                }
+            }
+
+            // Sync household members if provided
+            if ($request->has('household_members')) {
+                HouseholdMember::where('user_id', $user->id)->delete();
+
+                if ($request->household_members) {
+                    foreach ($request->household_members as $member) {
+                        HouseholdMember::create([
+                            'user_id' => $user->id,
+                            'name' => $member['name'],
+                            'gender' => $member['gender'] ?? 'iba',
+                            'age' => $member['age'] ?? 25,
+                            'activity_level' => $member['activity_level'] ?? 'moderate',
+                            'dietary_restrictions' => $member['dietary_restrictions'] ?? [],
+                            'health_conditions' => $member['health_conditions'] ?? [],
+                            'is_pregnant' => $member['is_pregnant'] ?? false,
+                        ]);
+                    }
+
+                    // Update household_count to match members
+                    $profile->update(['household_count' => count($request->household_members)]);
                 }
             }
 

@@ -48,6 +48,11 @@ class User extends Authenticatable
         return $this->hasMany(UserEquipment::class);
     }
 
+    public function householdMembers(): HasMany
+    {
+        return $this->hasMany(HouseholdMember::class);
+    }
+
     public function mealPlans(): HasMany
     {
         return $this->hasMany(MealPlan::class);
